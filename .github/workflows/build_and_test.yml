@@ -14,12 +14,13 @@ jobs:
       fail-fast: false
       matrix:
         include:
-          - name: "preload asan+mockeagain, 078 only"
+          - name: "HUP tests, test-nginx patched to use perl kill()"
             NGINX_VERSION: "1.31.8"
             TEST_NGINX_TIMEOUT: "10"
             ASAN: "1"
-            DEBUG_FILES: "t/078-hup-vars.t"
+            DEBUG_FILES: "t/078-hup-vars.t t/080-hup-shdict.t t/109-timer-hup.t t/122-worker-3.t t/149-hup-fake-shm-zone.t t/151-initby-hup.t t/157-socket-keepalive-hup.t t/163-exit-worker-hup.t"
             PRELOAD: "both"
+            PATCH_TEST_NGINX: "1"
 
     services:
       redis:
@@ -310,6 +311,18 @@ jobs:
           # give back and t/146-malloc-trim.t sees it return 0 where it expects
           # 1. Run every other file.
           sudo apt-get install -y --no-install-recommends gdb > /dev/null
+          echo "===== probe: which programs hang at startup with this LD_PRELOAD"
+          for cmd in "/usr/bin/kill -0 $$" "/bin/kill -0 $$" "/bin/true" "/bin/sh -c true" "/usr/bin/env true" "/usr/bin/perl -e 1" "/bin/ps -p $$"; do
+            timeout 10 $cmd > /dev/null 2>&1; rc=$?
+            echo "  [$rc] $cmd $( [ $rc = 124 ] && echo '<-- HANG' )"
+          done
+          dpkg -S /usr/bin/kill /bin/kill 2>/dev/null; ldd /usr/bin/kill
+          if [ "${{ matrix.PATCH_TEST_NGINX }}" = "1" ]; then
+            sed -i -e 's/system("kill -USR1 \$pid") == 0/kill(q{USR1}, $pid)/' \
+                   -e 's/system("kill -HUP \$pid") == 0/kill(q{HUP}, $pid)/' test-nginx/lib/Test/Nginx/Util.pm
+            grep -n "kill(q{\|system(\"kill" test-nginx/lib/Test/Nginx/Util.pm
+            grep -n "^use POSIX" test-nginx/lib/Test/Nginx/Util.pm
+          fi
           if [ -n "${{ matrix.DEBUG_FILES }}" ]; then
             echo "${{ matrix.DEBUG_FILES }}" | tr ' ' '\n' > /tmp/files
           else
@@ -319,9 +332,8 @@ jobs:
           echo "running $(wc -l < /tmp/files) files: $(head -1 /tmp/files) .. $(tail -1 /tmp/files)"
           # watchdog: once t/078 has started, dump state if nothing finishes
           (
-            until grep -q "sending USR1 signal" /tmp/prove.log 2>/dev/null; do sleep 2; done
-            sleep 60
-            echo "===== WATCHDOG: 60s after the first USR1"
+            sleep 900
+            echo "===== WATCHDOG: still running after 900s"
             for d in /proc/[0-9]*; do
               p=${d#/proc/}
               comm=$(cat $d/comm 2>/dev/null)
@@ -336,7 +348,7 @@ jobs:
             echo "===== error.log tail"; timeout 5 tail -60 t/servroot/logs/error.log 2>/dev/null
           ) &
           export TEST_NGINX_VERBOSE=1
-          timeout 600 xargs -a /tmp/files /usr/bin/env perl $(command -v prove) -v \
+          timeout 1500 xargs -a /tmp/files /usr/bin/env perl $(command -v prove) -v \
             -I. -Itest-nginx/inc -Itest-nginx/lib 2>&1 | tee /tmp/prove.log | tail -400
           echo "prove exit: ${PIPESTATUS[0]}"
           sleep 5
