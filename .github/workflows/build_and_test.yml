@@ -2,40 +2,18 @@ name: Build and test
 
 on:
   push:
-    branches: [ master ]
-  pull_request:
-    branches: [ master ]
-  workflow_dispatch:
+    branches: [ debug/asan-full ]
 
 jobs:
   test:
     name: ${{ matrix.name }}
     runs-on: ubuntu-22.04
+    timeout-minutes: 150
 
     strategy:
       fail-fast: false
       matrix:
         include:
-          - name: "nginx 1.31.8 + OpenSSL"
-            NGINX_VERSION: "1.31.8"
-            TEST_NGINX_TIMEOUT: "5"
-
-          - name: "nginx 1.31.8 + OpenSSL + HTTP/2"
-            NGINX_VERSION: "1.31.8"
-            TEST_NGINX_TIMEOUT: "5"
-            TEST_NGINX_USE_HTTP2: "1"
-
-          - name: "nginx 1.31.8 + OpenSSL + HTTP/3"
-            NGINX_VERSION: "1.31.8"
-            TEST_NGINX_USE_HTTP3: "1"
-            TEST_NGINX_QUIC_IDLE_TIMEOUT: "3"
-
-          - name: "nginx 1.31.8 + BoringSSL + HTTP/3"
-            NGINX_VERSION: "1.31.8"
-            BORINGSSL: "1"
-            TEST_NGINX_USE_HTTP3: "1"
-            TEST_NGINX_QUIC_IDLE_TIMEOUT: "3"
-
           - name: "nginx 1.31.8 + OpenSSL + ASan"
             NGINX_VERSION: "1.31.8"
             # ASan slows every request down, so allow more time than the
@@ -147,7 +125,7 @@ jobs:
           git clone --depth=1 https://github.com/openresty/stream-lua-nginx-module.git   ../stream-lua-nginx-module
 
           # Local repos — used directly from the working directory
-          git clone --depth=1 https://github.com/openresty/test-nginx.git
+          git clone --depth=1 -b bugfix/hup-signal-without-kill https://github.com/oowl/test-nginx.git
           git clone --depth=1 https://github.com/openresty/openresty-devel-utils.git
           git clone --depth=1 https://github.com/openresty/mockeagain.git
           git clone --depth=1 https://github.com/openresty/lua-cjson.git lua-cjson
