@@ -14,33 +14,12 @@ jobs:
       fail-fast: false
       matrix:
         include:
-          - name: "preload asan+mockeagain, 077+078"
-            NGINX_VERSION: "1.31.8"
-            TEST_NGINX_TIMEOUT: "10"
-            ASAN: "1"
-            DEBUG_FILES: "t/077-sleep.t t/078-hup-vars.t"
-            PRELOAD: "both"
-
           - name: "preload asan+mockeagain, 078 only"
             NGINX_VERSION: "1.31.8"
             TEST_NGINX_TIMEOUT: "10"
             ASAN: "1"
             DEBUG_FILES: "t/078-hup-vars.t"
             PRELOAD: "both"
-
-          - name: "preload asan only, 077+078"
-            NGINX_VERSION: "1.31.8"
-            TEST_NGINX_TIMEOUT: "10"
-            ASAN: "1"
-            DEBUG_FILES: "t/077-sleep.t t/078-hup-vars.t"
-            PRELOAD: "asan"
-
-          - name: "preload mockeagain only, 077+078"
-            NGINX_VERSION: "1.31.8"
-            TEST_NGINX_TIMEOUT: "10"
-            ASAN: "1"
-            DEBUG_FILES: "t/077-sleep.t t/078-hup-vars.t"
-            PRELOAD: "mockeagain"
 
     services:
       redis:
@@ -343,19 +322,18 @@ jobs:
             until grep -q "sending USR1 signal" /tmp/prove.log 2>/dev/null; do sleep 2; done
             sleep 60
             echo "===== WATCHDOG: 60s after the first USR1"
-            ps -eo pid,ppid,pgid,stat,wchan:30,etime,cmd --forest | grep -v "\[" | tail -60
-            for p in $(pgrep -x kill); do
-              echo "===== kernel stack of kill $p"; sudo cat /proc/$p/stack
-              echo "----- maps"; sudo grep -c . /proc/$p/maps; sudo head -5 /proc/$p/maps
+            for d in /proc/[0-9]*; do
+              p=${d#/proc/}
+              comm=$(cat $d/comm 2>/dev/null)
+              case "$comm" in nginx|kill|perl|prove|sh|xargs) ;; *) continue ;; esac
+              st=$(timeout 2 cut -d' ' -f3,4,5 $d/stat 2>/dev/null)
+              echo "== pid=$p comm=$comm state/ppid/pgrp=[$st] wchan=$(timeout 2 cat $d/wchan 2>/dev/null)"
+              timeout 2 grep -E "^(State|SigPnd|ShdPnd|SigBlk|SigIgn|SigCgt|Threads|VmRSS|VmSize)" $d/status 2>/dev/null | tr '\n' ' '; echo
+              timeout 3 sudo cat $d/stack 2>/dev/null | head -25
             done
-            for p in $(pgrep -f "nginx|prove|perl|kill"); do
-              echo "===== stack of $p: $(tr '\0' ' ' < /proc/$p/cmdline 2>/dev/null)"
-              cat /proc/$p/status 2>/dev/null | grep -E "State|SigBlk|SigIgn|SigPnd|ShdPnd|Threads"
-              sudo gdb -p $p -batch -ex "thread apply all bt 25" 2>/dev/null | grep -E "^#|^Thread" | head -60
-            done
-            echo "===== servroot"; ls -la t/servroot t/servroot/logs 2>/dev/null
-            echo "===== error.log tail"; tail -80 t/servroot/logs/error.log 2>/dev/null
-            echo "===== nginx.conf"; cat t/servroot/conf/nginx.conf 2>/dev/null | head -60
+            echo "===== dmesg"; timeout 10 sudo dmesg | tail -40
+            echo "===== free"; free -m
+            echo "===== error.log tail"; timeout 5 tail -60 t/servroot/logs/error.log 2>/dev/null
           ) &
           export TEST_NGINX_VERBOSE=1
           timeout 600 xargs -a /tmp/files /usr/bin/env perl $(command -v prove) -v \
