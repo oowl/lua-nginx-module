@@ -2,46 +2,29 @@ name: Build and test
 
 on:
   push:
-    branches: [ master ]
-  pull_request:
-    branches: [ master ]
-  workflow_dispatch:
+    branches: [ debug/asan-hup ]
 
 jobs:
   test:
     name: ${{ matrix.name }}
     runs-on: ubuntu-22.04
+    timeout-minutes: 60
 
     strategy:
       fail-fast: false
       matrix:
         include:
-          - name: "nginx 1.31.8 + OpenSSL"
+          - name: "ASan 077+078 only"
             NGINX_VERSION: "1.31.8"
-            TEST_NGINX_TIMEOUT: "5"
-
-          - name: "nginx 1.31.8 + OpenSSL + HTTP/2"
-            NGINX_VERSION: "1.31.8"
-            TEST_NGINX_TIMEOUT: "5"
-            TEST_NGINX_USE_HTTP2: "1"
-
-          - name: "nginx 1.31.8 + OpenSSL + HTTP/3"
-            NGINX_VERSION: "1.31.8"
-            TEST_NGINX_USE_HTTP3: "1"
-            TEST_NGINX_QUIC_IDLE_TIMEOUT: "3"
-
-          - name: "nginx 1.31.8 + BoringSSL + HTTP/3"
-            NGINX_VERSION: "1.31.8"
-            BORINGSSL: "1"
-            TEST_NGINX_USE_HTTP3: "1"
-            TEST_NGINX_QUIC_IDLE_TIMEOUT: "3"
-
-          - name: "nginx 1.31.8 + OpenSSL + ASan"
-            NGINX_VERSION: "1.31.8"
-            # ASan slows every request down, so allow more time than the
-            # other jobs before a test is called timed out.
             TEST_NGINX_TIMEOUT: "10"
             ASAN: "1"
+            DEBUG_FILES: "t/077-sleep.t t/078-hup-vars.t"
+
+          - name: "ASan full sequence up to 078"
+            NGINX_VERSION: "1.31.8"
+            TEST_NGINX_TIMEOUT: "10"
+            ASAN: "1"
+            DEBUG_FILES: ""
 
     services:
       redis:
@@ -326,8 +309,35 @@ jobs:
           # ASan replaces the allocator, so glibc's malloc_trim() has nothing to
           # give back and t/146-malloc-trim.t sees it return 0 where it expects
           # 1. Run every other file.
-          find t -name '*.t' ! -name '146-malloc-trim.t' -print0 | sort -z \
-            | xargs -0 /usr/bin/env perl $(command -v prove) -I. -Itest-nginx/inc -Itest-nginx/lib
+          sudo apt-get install -y --no-install-recommends gdb > /dev/null
+          if [ -n "${{ matrix.DEBUG_FILES }}" ]; then
+            echo "${{ matrix.DEBUG_FILES }}" | tr ' ' '\n' > /tmp/files
+          else
+            find t -name '*.t' ! -name '146-malloc-trim.t' | sort \
+              | awk '$0 <= "t/078-hup-vars.t"' > /tmp/files
+          fi
+          echo "running $(wc -l < /tmp/files) files: $(head -1 /tmp/files) .. $(tail -1 /tmp/files)"
+          # watchdog: once t/078 has started, dump state if nothing finishes
+          (
+            until grep -q "^t/078-hup-vars.t" /tmp/prove.log 2>/dev/null; do sleep 5; done
+            sleep 240
+            echo "===== WATCHDOG: still running 240s after t/078 started"
+            ps -eo pid,ppid,pgid,stat,wchan:30,etime,cmd --forest | grep -v "\[" | tail -60
+            for p in $(pgrep -f "nginx|prove|perl|kill"); do
+              echo "===== stack of $p: $(tr '\0' ' ' < /proc/$p/cmdline 2>/dev/null)"
+              cat /proc/$p/status 2>/dev/null | grep -E "State|SigBlk|SigIgn|SigPnd|ShdPnd|Threads"
+              sudo gdb -p $p -batch -ex "thread apply all bt 25" 2>/dev/null | grep -E "^#|^Thread" | head -60
+            done
+            echo "===== servroot"; ls -la t/servroot t/servroot/logs 2>/dev/null
+            echo "===== error.log tail"; tail -80 t/servroot/logs/error.log 2>/dev/null
+            echo "===== nginx.conf"; cat t/servroot/conf/nginx.conf 2>/dev/null | head -60
+          ) &
+          export TEST_NGINX_VERBOSE=1
+          timeout 1500 xargs -a /tmp/files /usr/bin/env perl $(command -v prove) -v \
+            -I. -Itest-nginx/inc -Itest-nginx/lib 2>&1 | tee /tmp/prove.log | tail -400
+          echo "prove exit: ${PIPESTATUS[0]}"
+          sleep 5
+          echo "===== files started:"; grep -E "^t/[^ ]+\.t \.\." /tmp/prove.log | tail -5
 
       - name: Show ASan reports
         if: matrix.ASAN == '1' && failure()
