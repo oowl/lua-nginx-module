@@ -147,7 +147,9 @@ jobs:
           git clone --depth=1 https://github.com/openresty/stream-lua-nginx-module.git   ../stream-lua-nginx-module
 
           # Local repos — used directly from the working directory
-          git clone --depth=1 https://github.com/openresty/test-nginx.git
+          # TEMPORARY, drop before merging: test-nginx with the HUP signal fix
+          # (kill(1) deadlocks under the ASan job's LD_PRELOAD on Ubuntu 22.04)
+          git clone --depth=1 -b bugfix/hup-signal-without-kill https://github.com/oowl/test-nginx.git
           git clone --depth=1 https://github.com/openresty/openresty-devel-utils.git
           git clone --depth=1 https://github.com/openresty/mockeagain.git
           git clone --depth=1 https://github.com/openresty/lua-cjson.git lua-cjson
