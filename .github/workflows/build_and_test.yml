@@ -313,10 +313,10 @@ jobs:
           sudo apt-get install -y --no-install-recommends gdb > /dev/null
           echo "===== probe: which programs hang at startup with this LD_PRELOAD"
           for cmd in "/usr/bin/kill -0 $$" "/bin/kill -0 $$" "/bin/true" "/bin/sh -c true" "/usr/bin/env true" "/usr/bin/perl -e 1" "/bin/ps -p $$"; do
-            timeout 10 $cmd > /dev/null 2>&1; rc=$?
+            rc=0; timeout 10 $cmd > /dev/null 2>&1 || rc=$?
             echo "  [$rc] $cmd $( [ $rc = 124 ] && echo '<-- HANG' )"
           done
-          dpkg -S /usr/bin/kill /bin/kill 2>/dev/null; ldd /usr/bin/kill
+          dpkg -S /usr/bin/kill /bin/kill 2>/dev/null || true; ldd /usr/bin/kill || true
           if [ "${{ matrix.PATCH_TEST_NGINX }}" = "1" ]; then
             sed -i -e 's/system("kill -USR1 \$pid") == 0/kill(q{USR1}, $pid)/' \
                    -e 's/system("kill -HUP \$pid") == 0/kill(q{HUP}, $pid)/' test-nginx/lib/Test/Nginx/Util.pm
@@ -348,6 +348,7 @@ jobs:
             echo "===== error.log tail"; timeout 5 tail -60 t/servroot/logs/error.log 2>/dev/null
           ) &
           export TEST_NGINX_VERBOSE=1
+          set +e
           timeout 1500 xargs -a /tmp/files /usr/bin/env perl $(command -v prove) -v \
             -I. -Itest-nginx/inc -Itest-nginx/lib 2>&1 | tee /tmp/prove.log | tail -400
           echo "prove exit: ${PIPESTATUS[0]}"
